@@ -1,7 +1,7 @@
+import keras.optimizers
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
-import keras as k
 import sklearn
 import scipy
 import skimage
@@ -76,14 +76,29 @@ def normalize_power_spectrum(spectrum):
 def extract_frequency(spectrum, min_freq, max_freq):
     bin_axis = np.arange(0, 2047, 1)
     bin_res = 0.01215
-    idx_min = min_freq/bin_res
-    idx_max = max_freq/bin_res
+    idx_min = min_freq / bin_res
+    idx_max = max_freq / bin_res
     idx = np.where((bin_axis >= idx_min) & (bin_axis <= idx_max))
 
     extracted_spectrum = []
     for i in range(0, len(spectrum)):
         extracted_spectrum.append(spectrum[i][idx])
     return extracted_spectrum
+
+
+def mean_intensity_acc(windows_x, windows_y, windows_z):
+    windows_x_env = []
+    windows_y_env = []
+    windows_z_env = []
+
+    for i in range(0, len(windows_x)):
+        windows_x_env = np.abs(scipy.signal.hilbert(windows_x[i]))
+        windows_y_env = np.abs(scipy.signal.hilbert(windows_y[i]))
+        windows_z_env = np.abs(scipy.signal.hilbert(windows_z[i]))
+
+    mean_windows_env = np.mean([windows_x_env, windows_y_env, windows_z_env], axis=0)
+
+    return mean_windows_env
 
 
 def load_data(filename):
@@ -172,25 +187,37 @@ if __name__ == '__main__':
 
     ####################################################################################################################
 
-    model = tf.keras.Sequential([
-        tf.keras.layers.Conv2D(filters=32, kernel_size=(2, 37), strides=4),
-        tf.keras.layers.LeakyReLU(),
-        tf.keras.layers.MaxPool2D(pool_size=(1, 2), strides=(2, 2)),
+    mean_intensity_acc = mean_intensity_acc(windows_acc_x, windows_acc_y, windows_acc_z)
+
+    ####################################################################################################################
+
+    model = tf.keras.models.Sequential([
+        tf.keras.layers.Conv2D(filters=32, kernel_size=(2, 37), strides=(4, 4),
+                               activation="relu", input_shape=(2, 222, 1)),
+        tf.keras.layers.MaxPooling2D(pool_size=(1, 2), strides=(2, 2)),
         tf.keras.layers.Dropout(0.5),
-        tf.keras.layers.Conv1D(64, kernel_size=5, strides=1),
-        tf.keras.layers.LeakyReLU(),
-        tf.keras.layers.MaxPool2D(pool_size=(1, 2), strides=(2, 2)),
+        tf.keras.layers.Conv1D(filters=64, kernel_size=5, strides=1, activation="relu"),
+        tf.keras.layers.Reshape((19, 64)),  # reshape to (None, 19, 64) from 4D to 3D input shape
+        tf.keras.layers.MaxPooling1D(pool_size=2, strides=2),
         tf.keras.layers.Dropout(0.5),
         tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(units=512),
+        tf.keras.layers.Dense(units=512, activation="relu"),
+
+        # Concatenation with acceleration intensity
+        tf.keras.layers.Dense(1),
+        tf.keras.layers.Reshape((1, 1)),
+        tf.keras.layers.Lambda(lambda x: tf.keras.backend.expand_dims(x[1], axis=1)),
+
+        tf.keras.layers.LSTM(512, return_sequences=True),
+        tf.keras.layers.LSTM(222),
+        tf.keras.layers.Dense(222, activation="relu"),
+        tf.keras.layers.Softmax(),
     ])
 
     model.compile(
-        optimizer="Adam",
+        optimizer="adam",
         loss="categorical_crossentropy",
         metrics="accuracy",
     )
-
-    model.build(input_shape=(2, 222))
 
     model.summary()
