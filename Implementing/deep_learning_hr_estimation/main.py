@@ -21,9 +21,9 @@ def design_bandpass_filter(order, lowcut, highcut, fs):
 
     return b, a, freq, resp
 
-def visualize_filter(frequency, response):
+def visualize_filter(f, r):
     plt.figure()
-    plt.plot(frequency, np.abs(response))
+    plt.plot(f, np.abs(r))
     plt.xlabel("Frequency in (Hz)")
     plt.ylabel("Magnitude")
     plt.title("Magnitude response")
@@ -104,12 +104,15 @@ def mean_intensity_acc(windows_x, windows_y, windows_z):
 
 
 def load_data(filename):
-    data = scipy.io.loadmat(filename)
-    rawPPG = data["rawPPG"]
-    rawACC = data["rawAcc"]
-    time = np.arange(0, len(rawPPG) * T, T)
-    window = np.arange(0, 8 * F, 1)
-    return rawPPG, rawACC, time, window
+    try:
+        data = scipy.io.loadmat(filename)
+        rawPPG = data["rawPPG"]
+        rawACC = data["rawAcc"]
+        time = np.arange(0, len(rawPPG) * T, T)
+        window = np.arange(0, 8 * F, 1)
+        return rawPPG, rawACC, time, window
+    except Exception as e:
+        print("Error: ", e)
 
 
 if __name__ == '__main__':
@@ -118,84 +121,92 @@ if __name__ == '__main__':
     b_1, a_1, frequency, response = design_bandpass_filter(4, 0.4, 4, F)
 
     # visualize filter if needed
-    visualize_filter(frequency=frequency, response=response)
+    # visualize_filter(f=frequency, r=response)
 
     ####################################################################################################################
 
-    # load data
-    PPG, ACC, t, w = load_data("BAMI-1/BAMI1_1.mat")
+    power_spectra_ppg = []
+    power_spectra_acc = []
+    intensity_acc = []
 
-    # create the windows of all 3 PPGs
-    windows_ppg_1 = create_windows(PPG[0], len(w), 2 * F)
-    windows_ppg_2 = create_windows(PPG[1], len(w), 2 * F)
-    windows_ppg_3 = create_windows(PPG[2], len(w), 2 * F)
+    for i in range(1, 3):
+        # load data
+        PPG, ACC, t, w = load_data("BAMI-1/BAMI1_{}.mat".format(i))
 
-    # filter all windows of all 3 PPGs
-    filtered_windows_ppg_1 = filter_windows(windows_ppg_1, b_1, a_1)
-    filtered_windows_ppg_2 = filter_windows(windows_ppg_2, b_1, a_1)
-    filtered_windows_ppg_3 = filter_windows(windows_ppg_3, b_1, a_1)
+        # create the windows of all 3 PPGs
+        windows_ppg_1 = create_windows(PPG[0], len(w), 2 * F)
+        windows_ppg_2 = create_windows(PPG[1], len(w), 2 * F)
+        windows_ppg_3 = create_windows(PPG[2], len(w), 2 * F)
 
-    # normalize all windows of all 3 PPGs
-    norm_filtered_windows_ppg_1 = scipy.stats.zscore(filtered_windows_ppg_1)
-    norm_filtered_windows_ppg_2 = scipy.stats.zscore(filtered_windows_ppg_2)
-    norm_filtered_windows_ppg_3 = scipy.stats.zscore(filtered_windows_ppg_3)
+        # filter all windows of all 3 PPGs
+        filtered_windows_ppg_1 = filter_windows(windows_ppg_1, b_1, a_1)
+        filtered_windows_ppg_2 = filter_windows(windows_ppg_2, b_1, a_1)
+        filtered_windows_ppg_3 = filter_windows(windows_ppg_3, b_1, a_1)
 
-    # calculate the mean of all windows of all 3 PPGs
-    norm_filtered_windows_ppg = np.mean([norm_filtered_windows_ppg_1, norm_filtered_windows_ppg_2,
-                                         norm_filtered_windows_ppg_3], axis=0)
+        # normalize all windows of all 3 PPGs
+        norm_filtered_windows_ppg_1 = scipy.stats.zscore(filtered_windows_ppg_1)
+        norm_filtered_windows_ppg_2 = scipy.stats.zscore(filtered_windows_ppg_2)
+        norm_filtered_windows_ppg_3 = scipy.stats.zscore(filtered_windows_ppg_3)
 
-    # resample the mean filtered windows
-    ds_norm_filtered_windows_ppg = skimage.transform.resize(norm_filtered_windows_ppg,
-                                                            (len(norm_filtered_windows_ppg), 200))
+        # calculate the mean of all windows of all 3 PPGs
+        norm_filtered_windows_ppg = np.mean([norm_filtered_windows_ppg_1, norm_filtered_windows_ppg_2,
+                                             norm_filtered_windows_ppg_3], axis=0)
 
-    print(len(ds_norm_filtered_windows_ppg))
+        # resample the mean filtered windows
+        ds_norm_filtered_windows_ppg = skimage.transform.resize(norm_filtered_windows_ppg,
+                                                                (len(norm_filtered_windows_ppg), 200))
 
-    # zero pad the down sampled windows to length of 2048
-    pad_windows_ppg = zero_pad(ds_norm_filtered_windows_ppg, 2048)
+        # zero pad the down sampled windows to length of 2048
+        pad_windows_ppg = zero_pad(ds_norm_filtered_windows_ppg, 2048)
 
-    # calculate the power spectrum
-    power_spectrum_ppg = create_power_spectrum(pad_windows_ppg)
+        # calculate the power spectrum
+        power_spectrum_ppg = create_power_spectrum(pad_windows_ppg)
 
-    # calculate the normalized power spectrum
-    norm_power_spectrum_ppg = normalize_power_spectrum(power_spectrum_ppg)
+        # calculate the normalized power spectrum
+        norm_power_spectrum_ppg = normalize_power_spectrum(power_spectrum_ppg)
 
-    # extract the power spectrum in range between 0.6 and 3.3 Hz
-    extract_power_spectrum_ppg = extract_frequency(norm_power_spectrum_ppg, 0.6, 3.3)
+        # extract the power spectrum in range between 0.6 and 3.3 Hz
+        extract_power_spectrum_ppg = extract_frequency(norm_power_spectrum_ppg, 0.6, 3.3)
 
-    ####################################################################################################################
-
-    # create the windows of all 3 ACCs
-    windows_acc_x = create_windows(ACC[0], len(w), 2 * F)
-    windows_acc_y = create_windows(ACC[1], len(w), 2 * F)
-    windows_acc_z = create_windows(ACC[2], len(w), 2 * F)
-
-    # filter all windows of all 3 ACCs
-    filtered_windows_acc_x = filter_windows(windows_acc_x, b_1, a_1)
-    filtered_windows_acc_y = filter_windows(windows_acc_y, b_1, a_1)
-    filtered_windows_acc_z = filter_windows(windows_acc_z, b_1, a_1)
-
-    # calculate the mean of all windows of all 3 ACCs
-    filtered_windows_acc = np.mean([filtered_windows_acc_x, filtered_windows_acc_y, filtered_windows_acc_z], axis=0)
-
-    # resample the mean filtered windows
-    ds_filtered_windows_acc = skimage.transform.resize(filtered_windows_acc,
-                                                       (len(filtered_windows_acc), 200))
-
-    # zero pad the down sampled windows to length of 2048
-    pad_windows_acc = zero_pad(ds_filtered_windows_acc, 2048)
-
-    # calculate the power spectrum
-    power_spectrum_acc = create_power_spectrum(pad_windows_acc)
-
-    # calculate the normalized power spectrum
-    norm_power_spectrum_acc = normalize_power_spectrum(power_spectrum_acc)
-
-    # extract the power spectrum in range between 0.6 and 3.3 Hz
-    extract_power_spectrum_acc = extract_frequency(norm_power_spectrum_acc, 0.6, 3.3)
+        power_spectra_ppg.append(extract_power_spectrum_ppg)
 
     ####################################################################################################################
 
-    mean_intensity_acc = mean_intensity_acc(windows_acc_x, windows_acc_y, windows_acc_z)
+        # create the windows of all 3 ACCs
+        windows_acc_x = create_windows(ACC[0], len(w), 2 * F)
+        windows_acc_y = create_windows(ACC[1], len(w), 2 * F)
+        windows_acc_z = create_windows(ACC[2], len(w), 2 * F)
+
+        # filter all windows of all 3 ACCs
+        filtered_windows_acc_x = filter_windows(windows_acc_x, b_1, a_1)
+        filtered_windows_acc_y = filter_windows(windows_acc_y, b_1, a_1)
+        filtered_windows_acc_z = filter_windows(windows_acc_z, b_1, a_1)
+
+        # calculate the mean of all windows of all 3 ACCs
+        filtered_windows_acc = np.mean([filtered_windows_acc_x, filtered_windows_acc_y, filtered_windows_acc_z], axis=0)
+
+        # resample the mean filtered windows
+        ds_filtered_windows_acc = skimage.transform.resize(filtered_windows_acc,
+                                                           (len(filtered_windows_acc), 200))
+
+        # zero pad the down sampled windows to length of 2048
+        pad_windows_acc = zero_pad(ds_filtered_windows_acc, 2048)
+
+        # calculate the power spectrum
+        power_spectrum_acc = create_power_spectrum(pad_windows_acc)
+
+        # calculate the normalized power spectrum
+        norm_power_spectrum_acc = normalize_power_spectrum(power_spectrum_acc)
+
+        # extract the power spectrum in range between 0.6 and 3.3 Hz
+        extract_power_spectrum_acc = extract_frequency(norm_power_spectrum_acc, 0.6, 3.3)
+
+        power_spectra_acc.append(extract_power_spectrum_acc)
+
+    ####################################################################################################################
+
+        mean_intensity_acc = mean_intensity_acc(windows_acc_x, windows_acc_y, windows_acc_z)
+        intensity_acc.append(list(mean_intensity_acc))
 
     ####################################################################################################################
 
