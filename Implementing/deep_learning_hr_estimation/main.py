@@ -1,4 +1,3 @@
-import keras.optimizers
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -19,14 +18,17 @@ def design_bandpass_filter(order, lowcut, highcut, fs):
     b, a = scipy.signal.butter(order, [low_n, high_n], btype='band')
 
     freq, resp = scipy.signal.freqz(b, a, fs=fs)
+
+    return b, a, freq, resp
+
+def visualize_filter(frequency, response):
     plt.figure()
-    plt.plot(freq, np.abs(resp))
+    plt.plot(frequency, np.abs(response))
     plt.xlabel("Frequency in (Hz)")
     plt.ylabel("Magnitude")
     plt.title("Magnitude response")
     plt.grid(True)
     plt.show()
-    return b, a
 
 
 def filter_windows(windows, b, a):
@@ -111,13 +113,17 @@ def load_data(filename):
 
 
 if __name__ == '__main__':
-    # load data
-    PPG, ACC, t, w = load_data("BAMI-1/BAMI1_1.mat")
 
     # create filter coefficients
-    b_1, a_1 = design_bandpass_filter(4, 0.4, 4, F)
+    b_1, a_1, frequency, response = design_bandpass_filter(4, 0.4, 4, F)
+
+    # visualize filter if needed
+    visualize_filter(frequency=frequency, response=response)
 
     ####################################################################################################################
+
+    # load data
+    PPG, ACC, t, w = load_data("BAMI-1/BAMI1_1.mat")
 
     # create the windows of all 3 PPGs
     windows_ppg_1 = create_windows(PPG[0], len(w), 2 * F)
@@ -141,6 +147,8 @@ if __name__ == '__main__':
     # resample the mean filtered windows
     ds_norm_filtered_windows_ppg = skimage.transform.resize(norm_filtered_windows_ppg,
                                                             (len(norm_filtered_windows_ppg), 200))
+
+    print(len(ds_norm_filtered_windows_ppg))
 
     # zero pad the down sampled windows to length of 2048
     pad_windows_ppg = zero_pad(ds_norm_filtered_windows_ppg, 2048)
@@ -193,10 +201,10 @@ if __name__ == '__main__':
 
     model = tf.keras.models.Sequential([
         tf.keras.layers.Conv2D(filters=32, kernel_size=(2, 37), strides=(4, 4),
-                               activation="relu", input_shape=(2, 222, 1)),
+                               activation=tf.keras.layers.LeakyReLU(alpha=0.2), input_shape=(2, 222, 1)),
         tf.keras.layers.MaxPooling2D(pool_size=(1, 2), strides=(2, 2)),
         tf.keras.layers.Dropout(0.5),
-        tf.keras.layers.Conv1D(filters=64, kernel_size=5, strides=1, activation="relu"),
+        tf.keras.layers.Conv1D(filters=64, kernel_size=5, strides=1, activation=tf.keras.layers.LeakyReLU(alpha=0.2)),
         tf.keras.layers.Reshape((19, 64)),  # reshape to (None, 19, 64) from 4D to 3D input shape
         tf.keras.layers.MaxPooling1D(pool_size=2, strides=2),
         tf.keras.layers.Dropout(0.5),
@@ -210,7 +218,7 @@ if __name__ == '__main__':
 
         tf.keras.layers.LSTM(512, return_sequences=True),
         tf.keras.layers.LSTM(222),
-        tf.keras.layers.Dense(222, activation="relu"),
+        tf.keras.layers.Dense(222, activation=tf.keras.layers.LeakyReLU(alpha=0.2)),
         tf.keras.layers.Softmax(),
     ])
 
