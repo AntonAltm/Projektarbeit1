@@ -25,9 +25,9 @@ def load_data(filename):
     """
     try:
         data = scipy.io.loadmat(filename)
-        rawPPG = pd.DataFrame.from_dict(data["rawPPG"])
-        rawACC = pd.DataFrame.from_dict(data["rawAcc"])
-        bpmECG = pd.DataFrame.from_dict(data["bpm_ecg"])
+        rawPPG = np.array(data["rawPPG"])
+        rawACC = np.array(data["rawAcc"])
+        bpmECG = np.array(data["bpm_ecg"])
 
         time = np.arange(0, len(rawPPG) * T, T)
         window = np.arange(0, 8 * F, 1)
@@ -72,82 +72,91 @@ def visualize_filter(f, r):
     plt.grid(True)
     plt.show()
 
-def create_windows(signal, window_size, shift):
+def create_windows(signal, window_size, shift, number_windows):
     """
     Creating the windows for the data
+    :param number_windows: number of windows
     :param signal: signal data, here: PPG or ACC
     :param window_size: the window size or duration
     :param shift: the seconds to shift the window along the data
     :return: returns the created windows
     """
-    windows = []
+    windows = np.empty((number_windows, 400))
     start = 0
     end = window_size
+    temp = 0
     while end <= len(signal):
         window = signal[start:end]
-        windows.append(window)
+        windows[temp] = window
         start += shift
         end += shift
+        temp += 1
     return windows
 
 
-def filter_windows(windows, b, a):
+def filter_windows(windows, b, a, number_windows):
     """
     Function filters the windows using the created bandpass filter coefficients
+    :param number_windows: number of windows
     :param windows: the window data which should be filtered
     :param b: coefficients of numerator
     :param a: coefficients of denominator
     :return: returns the filtered windows
     """
-    w_filtered = []
-    for w in windows:
-        out = scipy.signal.filtfilt(b, a, w)
-        w_filtered.append(out)
+    w_filtered = np.empty((number_windows, 400))
+    for x in range(0, number_windows):
+        out = scipy.signal.filtfilt(b, a, windows[x])
+        w_filtered[x] = out
     return w_filtered
 
 
-def create_power_spectrum(signal):
+def create_power_spectrum(signal, number_windows):
     """
     Creates the spectra of each window in the frequency domain
+    :param number_windows: number of windows
     :param signal: signal/window which will translated from time to frequency domain
     :return: returns the power spectra
     """
-    power_spectrum = []
+    power_spectrum = np.empty((number_windows, 2048))
     for i in range(0, len(signal)):
         out = np.fft.fft(signal[i])
-        power_spectrum.append(np.abs(out) ** 2)
+        power_spectrum[i] = (np.abs(out) ** 2)
     return power_spectrum
 
-def zero_pad(spectrum, length):
+def zero_pad(signal, length, number_windows):
     """
     Applies zero padding on the previously created spectra
-    :param spectrum: spectrum which is then zero padded
+    :param number_windows: number of windows
+    :param signal: spectrum which is then zero padded
     :param length: number of total frequency bins to pad
     :return: returns the padded spectrum
     """
-    pad_signal = []
-    for i in range(0, len(spectrum)):
-        out = np.pad(spectrum[i], (0, length - len(spectrum[0])), mode="constant")
-        pad_signal.append(out)
+    pad_signal = np.empty((number_windows, length))
+    for i in range(0, number_windows):
+        out = np.pad(signal[i], (0, length - len(signal[i])), mode="constant")
+        pad_signal[i] = out
     return pad_signal
 
 
-def normalize_power_spectrum(spectrum):
+def normalize_power_spectrum(spectrum, number_windows):
     """
     Normalizing the power spectra
+    :param number_windows: number of windows
     :param spectrum: spectrum which is then normalized
     :return: returns the normalized spectrum
     """
-    norm_spectrum = []
+    norm_spectrum = np.empty((number_windows, 2048))
+    out = np.empty((number_windows, 2048))
     for i in range(0, len(spectrum)):
-        out = (spectrum[i] - np.min(spectrum[i])) / (np.max(spectrum[i]) - np.min(spectrum[i]))
-        norm_spectrum.append(out)
+        out[i] = np.linalg.norm(spectrum[i], keepdims=True)
+        norm_spectrum[i] = spectrum[i] / out[i]
     return norm_spectrum
 
 
-def extract_frequency(spectrum, min_freq, max_freq):
+def extract_frequency(spectrum, min_freq, max_freq, number_windows):
     """
     Extracting/Filtering frequencies of the spectrum
+    :param number_windows: number of windows
     :param spectrum: spectrum which is filtered
     :param min_freq: lower frequency
     :param max_freq: higher frequency
@@ -159,9 +168,9 @@ def extract_frequency(spectrum, min_freq, max_freq):
     idx_max = max_freq / bin_res
     idx = np.where((bin_axis >= idx_min) & (bin_axis <= idx_max))
 
-    extracted_spectrum = []
+    extracted_spectrum = np.empty((number_windows, 222))
     for i in range(0, len(spectrum)):
-        extracted_spectrum.append(spectrum[i][idx])
+        extracted_spectrum[i] = spectrum[i][idx]
     return extracted_spectrum
 
 
@@ -198,24 +207,24 @@ if __name__ == '__main__':
     power_spectra_ppg = []
     power_spectra_acc = []
     intensity_acc = []
-    ground_truth = []
 
-    for i in range(1, 3):
+    for i in range(1, 25):
         # load data
         PPG, ACC, GT, t, w = load_data("BAMI-1/BAMI1_{}.mat".format(i))
 
         # save ground truth data
-        ground_truth.append(GT)
+        GT = np.expand_dims(GT, axis=2)
+        ground_truth = np.concatenate(GT)
 
         # create the windows of all 3 PPGs
-        windows_ppg_1 = create_windows(PPG.iloc[0], len(w), 2 * F)
-        windows_ppg_2 = create_windows(PPG.iloc[1], len(w), 2 * F)
-        windows_ppg_3 = create_windows(PPG.iloc[2], len(w), 2 * F)
+        windows_ppg_1 = create_windows(PPG[0], len(w), 2 * F, number_windows=len(GT))
+        windows_ppg_2 = create_windows(PPG[1], len(w), 2 * F, number_windows=len(GT))
+        windows_ppg_3 = create_windows(PPG[2], len(w), 2 * F, number_windows=len(GT))
 
         # filter all windows of all 3 PPGs
-        filtered_windows_ppg_1 = filter_windows(windows_ppg_1, b_1, a_1)
-        filtered_windows_ppg_2 = filter_windows(windows_ppg_2, b_1, a_1)
-        filtered_windows_ppg_3 = filter_windows(windows_ppg_3, b_1, a_1)
+        filtered_windows_ppg_1 = filter_windows(windows_ppg_1, b_1, a_1, number_windows=len(GT))
+        filtered_windows_ppg_2 = filter_windows(windows_ppg_2, b_1, a_1, number_windows=len(GT))
+        filtered_windows_ppg_3 = filter_windows(windows_ppg_3, b_1, a_1, number_windows=len(GT))
 
         # normalize all windows of all 3 PPGs
         norm_filtered_windows_ppg_1 = scipy.stats.zscore(filtered_windows_ppg_1)
@@ -231,30 +240,31 @@ if __name__ == '__main__':
                                                                 (len(norm_filtered_windows_ppg), 200))
 
         # zero pad the down sampled windows to length of 2048
-        pad_windows_ppg = zero_pad(ds_norm_filtered_windows_ppg, 2048)
+        pad_windows_ppg = zero_pad(ds_norm_filtered_windows_ppg, 2048, number_windows=len(GT))
 
         # calculate the power spectrum
-        power_spectrum_ppg = create_power_spectrum(pad_windows_ppg)
+        power_spectrum_ppg = create_power_spectrum(pad_windows_ppg, number_windows=len(GT))
 
         # calculate the normalized power spectrum
-        norm_power_spectrum_ppg = normalize_power_spectrum(power_spectrum_ppg)
+        norm_power_spectrum_ppg = normalize_power_spectrum(power_spectrum_ppg, number_windows=len(GT))
 
         # extract the power spectrum in range between 0.6 and 3.3 Hz
-        extract_power_spectrum_ppg = extract_frequency(norm_power_spectrum_ppg, 0.6, 3.3)
+        extract_power_spectrum_ppg = extract_frequency(norm_power_spectrum_ppg, 0.6, 3.3, number_windows=len(GT))
 
+        extract_power_spectrum_ppg = np.expand_dims(extract_power_spectrum_ppg, axis=2)
         power_spectra_ppg.append(extract_power_spectrum_ppg)
 
     ####################################################################################################################
 
         # create the windows of all 3 ACCs
-        windows_acc_x = create_windows(ACC.iloc[0], len(w), 2 * F)
-        windows_acc_y = create_windows(ACC.iloc[1], len(w), 2 * F)
-        windows_acc_z = create_windows(ACC.iloc[2], len(w), 2 * F)
+        windows_acc_x = create_windows(ACC[0], len(w), 2 * F, number_windows=len(GT))
+        windows_acc_y = create_windows(ACC[1], len(w), 2 * F, number_windows=len(GT))
+        windows_acc_z = create_windows(ACC[2], len(w), 2 * F, number_windows=len(GT))
 
         # filter all windows of all 3 ACCs
-        filtered_windows_acc_x = filter_windows(windows_acc_x, b_1, a_1)
-        filtered_windows_acc_y = filter_windows(windows_acc_y, b_1, a_1)
-        filtered_windows_acc_z = filter_windows(windows_acc_z, b_1, a_1)
+        filtered_windows_acc_x = filter_windows(windows_acc_x, b_1, a_1, number_windows=len(GT))
+        filtered_windows_acc_y = filter_windows(windows_acc_y, b_1, a_1, number_windows=len(GT))
+        filtered_windows_acc_z = filter_windows(windows_acc_z, b_1, a_1, number_windows=len(GT))
 
         # calculate the mean of all windows of all 3 ACCs
         filtered_windows_acc = np.mean([filtered_windows_acc_x, filtered_windows_acc_y, filtered_windows_acc_z], axis=0)
@@ -264,17 +274,18 @@ if __name__ == '__main__':
                                                            (len(filtered_windows_acc), 200))
 
         # zero pad the down sampled windows to length of 2048
-        pad_windows_acc = zero_pad(ds_filtered_windows_acc, 2048)
+        pad_windows_acc = zero_pad(ds_filtered_windows_acc, 2048, number_windows=len(GT))
 
         # calculate the power spectrum
-        power_spectrum_acc = create_power_spectrum(pad_windows_acc)
+        power_spectrum_acc = create_power_spectrum(pad_windows_acc, number_windows=len(GT))
 
         # calculate the normalized power spectrum
-        norm_power_spectrum_acc = normalize_power_spectrum(power_spectrum_acc)
+        norm_power_spectrum_acc = normalize_power_spectrum(power_spectrum_acc, number_windows=len(GT))
 
         # extract the power spectrum in range between 0.6 and 3.3 Hz
-        extract_power_spectrum_acc = extract_frequency(norm_power_spectrum_acc, 0.6, 3.3)
+        extract_power_spectrum_acc = extract_frequency(norm_power_spectrum_acc, 0.6, 3.3, number_windows=len(GT))
 
+        extract_power_spectrum_acc = np.expand_dims(extract_power_spectrum_acc, axis=2)
         power_spectra_acc.append(extract_power_spectrum_acc)
 
     ####################################################################################################################
@@ -323,10 +334,3 @@ if __name__ == '__main__':
     # X_test: test data with features
     # y_train: train data with ground truth
     # y_test: test data with ground truth
-
-    X_train = np.array([power_spectra_ppg[0][0], power_spectra_acc[0][0]])
-    X_test = np.array([power_spectra_ppg[1][0], power_spectra_acc[1][0]])
-    y_train = np.array(ground_truth[0][range(1, 3)])
-    y_test = np.array(ground_truth[1][range(1, 3)])
-
-    model.fit(X_train, y_train, batch_size=32, epochs=10, validation_data=(X_test, y_test))
