@@ -6,7 +6,7 @@ Sensor data fusion of PPG and ACC data for heart rate estimation using neural ne
 """
 
 import numpy as np
-import pandas as pd
+import sklearn
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import scipy
@@ -207,14 +207,16 @@ if __name__ == '__main__':
     power_spectra_ppg = []
     power_spectra_acc = []
     intensity_acc = []
+    ground_truth = []
 
     for i in range(1, 25):
         # load data
         PPG, ACC, GT, t, w = load_data("BAMI-1/BAMI1_{}.mat".format(i))
 
         # save ground truth data
-        GT = np.expand_dims(GT, axis=2)
-        ground_truth = np.concatenate(GT)
+        # GT = np.expand_dims(GT, axis=2)
+        # ground_truth = np.concatenate(GT)
+        ground_truth.append(GT)
 
         # create the windows of all 3 PPGs
         windows_ppg_1 = create_windows(PPG[0], len(w), 2 * F, number_windows=len(GT))
@@ -300,12 +302,12 @@ if __name__ == '__main__':
                                activation=tf.keras.layers.LeakyReLU(alpha=0.2),
                                input_shape=(2, 222, 1)),
         tf.keras.layers.MaxPooling2D(pool_size=(1, 2), strides=(2, 2)),
-        tf.keras.layers.Dropout(0.5),
+        tf.keras.layers.Dropout(0.3),
         tf.keras.layers.Conv1D(filters=64, kernel_size=5, strides=1,
                                activation=tf.keras.layers.LeakyReLU(alpha=0.2)),
         tf.keras.layers.Reshape((19, 64)),  # reshape to (None, 19, 64) from 4D to 3D input shape
         tf.keras.layers.MaxPooling1D(pool_size=2, strides=2),
-        tf.keras.layers.Dropout(0.5),
+        tf.keras.layers.Dropout(0.3),
         tf.keras.layers.Flatten(),
         tf.keras.layers.Dense(units=512, activation="relu"),
 
@@ -315,7 +317,9 @@ if __name__ == '__main__':
         tf.keras.layers.Lambda(lambda x: tf.keras.backend.expand_dims(x[1], axis=1)),
 
         tf.keras.layers.LSTM(512, return_sequences=True),
+        tf.keras.layers.Dropout(0.3),
         tf.keras.layers.LSTM(222),
+        tf.keras.layers.Dropout(0.2),
         tf.keras.layers.Dense(222, activation=tf.keras.layers.LeakyReLU(alpha=0.2)),
         tf.keras.layers.Softmax(),
     ])
