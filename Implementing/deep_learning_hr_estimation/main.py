@@ -4,7 +4,7 @@ Date: 25.06.2023
 
 Sensor data fusion of PPG and ACC data for heart rate estimation using neural network
 """
-
+import itertools
 import numpy as np
 import sklearn
 import tensorflow as tf
@@ -174,26 +174,23 @@ def extract_frequency(spectrum, min_freq, max_freq, number_windows):
     return extracted_spectrum
 
 
-def calc_mean_intensity_acc(windows_x, windows_y, windows_z):
+def calc_mean_intensity_acc(windows):
     """
     Calculates the mean acc intensity using the absolute Hilbert signal method
-    :param windows_x: windows of the x-axis acc data
-    :param windows_y: windows of the y-axis acc data
-    :param windows_z: windows of the z-axis acc data
     :return: returns the mean acc intensity (envelope signal of the mean acc data)
     """
-    windows_x_env = []
-    windows_y_env = []
-    windows_z_env = []
 
-    for i in range(0, len(windows_x)):
-        windows_x_env = np.abs(scipy.signal.hilbert(windows_x[i]))
-        windows_y_env = np.abs(scipy.signal.hilbert(windows_y[i]))
-        windows_z_env = np.abs(scipy.signal.hilbert(windows_z[i]))
+    mean_window_intensity = np.empty((len(windows), 1))
 
-    mean_windows_env = np.mean([windows_x_env, windows_y_env, windows_z_env], axis=0)
+    for i in range(0, len(windows)):
+        mean_window_intensity[i] = np.mean(np.abs(scipy.signal.hilbert(windows[i])))
 
-    return mean_windows_env
+    return mean_window_intensity
+
+def custom_loss(y_true, y_pred, sigma=3):
+    loss = (-1) * np.log(y_pred * ((np.exp(-((y_true**2)/(2*sigma**2))))/np.max(np.exp(-((y_true**2)/(2*sigma**2))))))
+
+    return loss
 
 
 if __name__ == '__main__':
@@ -209,7 +206,7 @@ if __name__ == '__main__':
     intensity_acc = []
     ground_truth = []
 
-    for i in range(1, 25):
+    for i in range(1, 3):
         # load data
         PPG, ACC, GT, t, w = load_data("BAMI-1/BAMI1_{}.mat".format(i))
 
@@ -253,7 +250,7 @@ if __name__ == '__main__':
         # extract the power spectrum in range between 0.6 and 3.3 Hz
         extract_power_spectrum_ppg = extract_frequency(norm_power_spectrum_ppg, 0.6, 3.3, number_windows=len(GT))
 
-        extract_power_spectrum_ppg = np.expand_dims(extract_power_spectrum_ppg, axis=2)
+        # extract_power_spectrum_ppg = np.expand_dims(extract_power_spectrum_ppg, axis=2)
         power_spectra_ppg.append(extract_power_spectrum_ppg)
 
     ####################################################################################################################
@@ -268,32 +265,45 @@ if __name__ == '__main__':
         filtered_windows_acc_y = filter_windows(windows_acc_y, b_1, a_1, number_windows=len(GT))
         filtered_windows_acc_z = filter_windows(windows_acc_z, b_1, a_1, number_windows=len(GT))
 
-        # calculate the mean of all windows of all 3 ACCs
-        filtered_windows_acc = np.mean([filtered_windows_acc_x, filtered_windows_acc_y, filtered_windows_acc_z], axis=0)
-
         # resample the mean filtered windows
-        ds_filtered_windows_acc = skimage.transform.resize(filtered_windows_acc,
-                                                           (len(filtered_windows_acc), 200))
+        ds_filtered_windows_acc_x = skimage.transform.resize(filtered_windows_acc_x,
+                                                           (len(filtered_windows_acc_x), 200))
+        ds_filtered_windows_acc_y = skimage.transform.resize(filtered_windows_acc_y,
+                                                           (len(filtered_windows_acc_y), 200))
+        ds_filtered_windows_acc_z = skimage.transform.resize(filtered_windows_acc_z,
+                                                           (len(filtered_windows_acc_z), 200))
 
         # zero pad the down sampled windows to length of 2048
-        pad_windows_acc = zero_pad(ds_filtered_windows_acc, 2048, number_windows=len(GT))
+        pad_windows_acc_x = zero_pad(ds_filtered_windows_acc_x, 2048, number_windows=len(GT))
+        pad_windows_acc_y = zero_pad(ds_filtered_windows_acc_y, 2048, number_windows=len(GT))
+        pad_windows_acc_z = zero_pad(ds_filtered_windows_acc_z, 2048, number_windows=len(GT))
 
         # calculate the power spectrum
-        power_spectrum_acc = create_power_spectrum(pad_windows_acc, number_windows=len(GT))
+        power_spectrum_acc_x = create_power_spectrum(pad_windows_acc_x, number_windows=len(GT))
+        power_spectrum_acc_y = create_power_spectrum(pad_windows_acc_y, number_windows=len(GT))
+        power_spectrum_acc_z = create_power_spectrum(pad_windows_acc_z, number_windows=len(GT))
 
         # calculate the normalized power spectrum
-        norm_power_spectrum_acc = normalize_power_spectrum(power_spectrum_acc, number_windows=len(GT))
+        norm_power_spectrum_acc_x = normalize_power_spectrum(power_spectrum_acc_x, number_windows=len(GT))
+        norm_power_spectrum_acc_y = normalize_power_spectrum(power_spectrum_acc_y, number_windows=len(GT))
+        norm_power_spectrum_acc_z = normalize_power_spectrum(power_spectrum_acc_z, number_windows=len(GT))
+
+        norm_power_spectrum_acc = np.mean([norm_power_spectrum_acc_x,
+                                           norm_power_spectrum_acc_y,
+                                           norm_power_spectrum_acc_z], axis=0)
 
         # extract the power spectrum in range between 0.6 and 3.3 Hz
         extract_power_spectrum_acc = extract_frequency(norm_power_spectrum_acc, 0.6, 3.3, number_windows=len(GT))
 
-        extract_power_spectrum_acc = np.expand_dims(extract_power_spectrum_acc, axis=2)
+        # extract_power_spectrum_acc = np.expand_dims(extract_power_spectrum_acc, axis=2)
         power_spectra_acc.append(extract_power_spectrum_acc)
 
     ####################################################################################################################
 
-        mean_intensity_acc = calc_mean_intensity_acc(windows_acc_x, windows_acc_y, windows_acc_z)
-        intensity_acc.append(mean_intensity_acc)
+        mean_intensity_acc_x = calc_mean_intensity_acc(ds_filtered_windows_acc_x)
+        mean_intensity_acc_y = calc_mean_intensity_acc(ds_filtered_windows_acc_y)
+        mean_intensity_acc_z = calc_mean_intensity_acc(ds_filtered_windows_acc_z)
+        intensity_acc.append(np.mean([mean_intensity_acc_x, mean_intensity_acc_y, mean_intensity_acc_z], axis=0))
 
     ####################################################################################################################
 
@@ -330,6 +340,12 @@ if __name__ == '__main__':
         metrics="accuracy",
     )
 
+    # model.compile(
+    #     optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
+    #     loss=custom_loss,
+    #     metrics="accuracy",
+    # )
+
     model.summary()
 
     ####################################################################################################################
@@ -338,3 +354,13 @@ if __name__ == '__main__':
     # X_test: test data with features
     # y_train: train data with ground truth
     # y_test: test data with ground truth
+
+    PPG_data_array = np.array(power_spectra_ppg)
+    ACC_data_array = np.array(power_spectra_acc)
+    labels_array = np.array(ground_truth)
+
+    input_data = np.stack((PPG_data_array, ACC_data_array), axis=2)
+
+    train_dataset = tf.data.Dataset.from_tensor_slices((input_data, labels_array))
+
+    model.fit(train_dataset, epochs=10)
