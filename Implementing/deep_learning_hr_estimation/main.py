@@ -4,9 +4,8 @@ Date: 25.06.2023
 
 Sensor data fusion of PPG and ACC data for heart rate estimation using neural network
 """
-import itertools
+
 import numpy as np
-import sklearn
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import scipy
@@ -94,17 +93,17 @@ def create_windows(signal, window_size, shift, number_windows):
     return windows
 
 
-def filter_windows(windows, b, a, number_windows):
+def filter_windows(windows, b, a, num_windows):
     """
     Function filters the windows using the created bandpass filter coefficients
-    :param number_windows: number of windows
+    :param num_windows: number of windows
     :param windows: the window data which should be filtered
     :param b: coefficients of numerator
     :param a: coefficients of denominator
     :return: returns the filtered windows
     """
-    w_filtered = np.empty((number_windows, 400))
-    for x in range(0, number_windows):
+    w_filtered = np.empty((num_windows, 400))
+    for x in range(0, num_windows):
         out = scipy.signal.filtfilt(b, a, windows[x])
         w_filtered[x] = out
     return w_filtered
@@ -187,6 +186,18 @@ def calc_mean_intensity_acc(windows):
 
     return mean_window_intensity
 
+def gaussian_heart_rate(labels, num_samples=222, sigma=3, mu=0):
+    out = []
+
+    for i in range(0, len(labels)):
+        gaussian_samples = np.empty((len(labels[i]), num_samples))
+        for j in range(0, len(labels[i])):
+            x = np.linspace(mu - 3*sigma, mu + 3*sigma, num_samples)
+            gaussian_samples[j] = labels[i][j] * np.exp(-0.5 * ((x - mu) / sigma)**2)
+        out.append(gaussian_samples)
+
+    return out
+
 def custom_loss(y_true, y_pred, sigma=3):
     loss = (-1) * np.log(y_pred * ((np.exp(-((y_true**2)/(2*sigma**2))))/np.max(np.exp(-((y_true**2)/(2*sigma**2))))))
 
@@ -205,10 +216,12 @@ if __name__ == '__main__':
     power_spectra_acc = []
     intensity_acc = []
     ground_truth = []
+    number_windows = []
 
-    for i in range(1, 3):
+    for i in range(1, 25):
         # load data
         PPG, ACC, GT, t, w = load_data("BAMI-1/BAMI1_{}.mat".format(i))
+        number_windows.append(len(GT))
 
         # save ground truth data
         # GT = np.expand_dims(GT, axis=2)
@@ -221,9 +234,9 @@ if __name__ == '__main__':
         windows_ppg_3 = create_windows(PPG[2], len(w), 2 * F, number_windows=len(GT))
 
         # filter all windows of all 3 PPGs
-        filtered_windows_ppg_1 = filter_windows(windows_ppg_1, b_1, a_1, number_windows=len(GT))
-        filtered_windows_ppg_2 = filter_windows(windows_ppg_2, b_1, a_1, number_windows=len(GT))
-        filtered_windows_ppg_3 = filter_windows(windows_ppg_3, b_1, a_1, number_windows=len(GT))
+        filtered_windows_ppg_1 = filter_windows(windows_ppg_1, b_1, a_1, num_windows=len(GT))
+        filtered_windows_ppg_2 = filter_windows(windows_ppg_2, b_1, a_1, num_windows=len(GT))
+        filtered_windows_ppg_3 = filter_windows(windows_ppg_3, b_1, a_1, num_windows=len(GT))
 
         # normalize all windows of all 3 PPGs
         norm_filtered_windows_ppg_1 = scipy.stats.zscore(filtered_windows_ppg_1)
@@ -261,9 +274,9 @@ if __name__ == '__main__':
         windows_acc_z = create_windows(ACC[2], len(w), 2 * F, number_windows=len(GT))
 
         # filter all windows of all 3 ACCs
-        filtered_windows_acc_x = filter_windows(windows_acc_x, b_1, a_1, number_windows=len(GT))
-        filtered_windows_acc_y = filter_windows(windows_acc_y, b_1, a_1, number_windows=len(GT))
-        filtered_windows_acc_z = filter_windows(windows_acc_z, b_1, a_1, number_windows=len(GT))
+        filtered_windows_acc_x = filter_windows(windows_acc_x, b_1, a_1, num_windows=len(GT))
+        filtered_windows_acc_y = filter_windows(windows_acc_y, b_1, a_1, num_windows=len(GT))
+        filtered_windows_acc_z = filter_windows(windows_acc_z, b_1, a_1, num_windows=len(GT))
 
         # resample the mean filtered windows
         ds_filtered_windows_acc_x = skimage.transform.resize(filtered_windows_acc_x,
@@ -340,12 +353,6 @@ if __name__ == '__main__':
         metrics="accuracy",
     )
 
-    # model.compile(
-    #     optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
-    #     loss=custom_loss,
-    #     metrics="accuracy",
-    # )
-
     model.summary()
 
     ####################################################################################################################
@@ -355,12 +362,18 @@ if __name__ == '__main__':
     # y_train: train data with ground truth
     # y_test: test data with ground truth
 
-    PPG_data_array = np.array(power_spectra_ppg)
-    ACC_data_array = np.array(power_spectra_acc)
-    labels_array = np.array(ground_truth)
+    labels_array = gaussian_heart_rate(ground_truth)
 
-    input_data = np.stack((PPG_data_array, ACC_data_array), axis=2)
+    PPG_data_array = np.zeros((len(power_spectra_ppg), np.max(number_windows), 222))
+    ACC_data_array = np.zeros((len(power_spectra_acc), np.max(number_windows), 222))
+    Labels_data_array = np.zeros((len(ground_truth), np.max(number_windows), 222))
 
-    train_dataset = tf.data.Dataset.from_tensor_slices((input_data, labels_array))
+    for i in range(0, len(power_spectra_ppg)):
+        start = 0
+        end = min(start + power_spectra_ppg[i].shape[0], PPG_data_array.shape[1])
 
-    model.fit(train_dataset, epochs=10)
+        PPG_data_array[i][start:end, :] = power_spectra_ppg[i][:end - start, :]
+        ACC_data_array[i][start:end, :] = power_spectra_acc[i][:end - start, :]
+        Labels_data_array[i][start:end, :] = labels_array[i][:end - start, :]
+
+    test = np.stack((PPG_data_array, ACC_data_array), axis=2)
