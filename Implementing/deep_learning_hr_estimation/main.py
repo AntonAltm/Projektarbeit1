@@ -6,6 +6,7 @@ Sensor data fusion of PPG and ACC data for heart rate estimation using neural ne
 """
 
 import numpy as np
+from sklearn.model_selection import train_test_split
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import scipy
@@ -36,6 +37,7 @@ def load_data(filename):
     except Exception as e:
         print("Error: ", e)
 
+
 def design_bandpass_filter(order, lowcut, highcut, fs):
     """
     Creating the coefficients (b, a), frequency samples and filter response of a bandpass filter
@@ -56,6 +58,7 @@ def design_bandpass_filter(order, lowcut, highcut, fs):
 
     return b, a, freq, resp
 
+
 def visualize_filter(f, r):
     """
     Function visualize the filter response
@@ -70,6 +73,7 @@ def visualize_filter(f, r):
     plt.title("Magnitude response")
     plt.grid(True)
     plt.show()
+
 
 def create_windows(signal, window_size, shift, number_windows):
     """
@@ -121,6 +125,7 @@ def create_power_spectrum(signal, number_windows):
         out = np.fft.fft(signal[i])
         power_spectrum[i] = (np.abs(out) ** 2)
     return power_spectrum
+
 
 def zero_pad(signal, length, number_windows):
     """
@@ -186,22 +191,25 @@ def calc_mean_intensity_acc(windows):
 
     return mean_window_intensity
 
-def gaussian_heart_rate(labels, num_samples=222, sigma=3, mu=0):
+
+def gaussian_heart_rate(labels, num_samples=222, sigma=3):
+    """
+    Creates a Gaussian distribution
+    :param labels: heart rate value per window
+    :param num_samples: number of samples fitting to number of samples in window
+    :param sigma: standard deviation, fixed set as 3
+    :return:
+    """
     out = []
 
     for i in range(0, len(labels)):
         gaussian_samples = np.empty((len(labels[i]), num_samples))
         for j in range(0, len(labels[i])):
-            x = np.linspace(mu - 3*sigma, mu + 3*sigma, num_samples)
-            gaussian_samples[j] = labels[i][j] * np.exp(-0.5 * ((x - mu) / sigma)**2)
+            x = np.linspace(0.6, 3.3, num_samples)
+            gaussian_samples[j] = 1 * np.exp(-0.5 * ((x - (labels[i][j] / 60)) / sigma) ** 2)
         out.append(gaussian_samples)
 
     return out
-
-def custom_loss(y_true, y_pred, sigma=3):
-    loss = (-1) * np.log(y_pred * ((np.exp(-((y_true**2)/(2*sigma**2))))/np.max(np.exp(-((y_true**2)/(2*sigma**2))))))
-
-    return loss
 
 
 if __name__ == '__main__':
@@ -266,7 +274,7 @@ if __name__ == '__main__':
         # extract_power_spectrum_ppg = np.expand_dims(extract_power_spectrum_ppg, axis=2)
         power_spectra_ppg.append(extract_power_spectrum_ppg)
 
-    ####################################################################################################################
+        ################################################################################################################
 
         # create the windows of all 3 ACCs
         windows_acc_x = create_windows(ACC[0], len(w), 2 * F, number_windows=len(GT))
@@ -280,11 +288,11 @@ if __name__ == '__main__':
 
         # resample the mean filtered windows
         ds_filtered_windows_acc_x = skimage.transform.resize(filtered_windows_acc_x,
-                                                           (len(filtered_windows_acc_x), 200))
+                                                             (len(filtered_windows_acc_x), 200))
         ds_filtered_windows_acc_y = skimage.transform.resize(filtered_windows_acc_y,
-                                                           (len(filtered_windows_acc_y), 200))
+                                                             (len(filtered_windows_acc_y), 200))
         ds_filtered_windows_acc_z = skimage.transform.resize(filtered_windows_acc_z,
-                                                           (len(filtered_windows_acc_z), 200))
+                                                             (len(filtered_windows_acc_z), 200))
 
         # zero pad the down sampled windows to length of 2048
         pad_windows_acc_x = zero_pad(ds_filtered_windows_acc_x, 2048, number_windows=len(GT))
@@ -311,7 +319,7 @@ if __name__ == '__main__':
         # extract_power_spectrum_acc = np.expand_dims(extract_power_spectrum_acc, axis=2)
         power_spectra_acc.append(extract_power_spectrum_acc)
 
-    ####################################################################################################################
+        ################################################################################################################
 
         mean_intensity_acc_x = calc_mean_intensity_acc(ds_filtered_windows_acc_x)
         mean_intensity_acc_y = calc_mean_intensity_acc(ds_filtered_windows_acc_y)
@@ -320,36 +328,66 @@ if __name__ == '__main__':
 
     ####################################################################################################################
 
+    temp_list = []
+
+    for i in range(0, len(power_spectra_ppg)):
+        for j in range(0, len(power_spectra_ppg[i])):
+            temp_list.append(np.array([power_spectra_ppg[i][j], power_spectra_acc[i][j]]))
+
+    data_array = np.empty((len(temp_list), 2, 222))
+
+    for x in range(0, len(temp_list)):
+        data_array[x] = temp_list[x]
+
+    labels_list = gaussian_heart_rate(ground_truth)
+
+    temp_list = []
+
+    for i in range(0, len(labels_list)):
+        for j in range(0, len(labels_list[i])):
+            temp_list.append(np.array(labels_list[i][j]))
+
+    labels_array = np.empty((len(temp_list), 1, 222))
+
+    for x in range(0, len(temp_list)):
+        labels_array[x] = temp_list[x]
+
+    temp_list = []
+
+    for i in range(0, len(intensity_acc)):
+        for j in range(0, len(intensity_acc[i])):
+            temp_list.append(np.array(intensity_acc[i][j]))
+
+    intensity_array = np.empty((len(temp_list), 1, 1))
+
+    for x in range(0, len(temp_list)):
+        intensity_array[x] = temp_list[x]
+
+    ####################################################################################################################
+
     model = tf.keras.models.Sequential([
-        tf.keras.layers.Conv2D(filters=32, kernel_size=(2, 37), strides=(4, 4),
-                               activation=tf.keras.layers.LeakyReLU(alpha=0.2),
+        tf.keras.layers.Conv2D(filters=32, kernel_size=(2, 37), strides=(4, 4), padding="same",
                                input_shape=(2, 222, 1)),
+        tf.keras.layers.LeakyReLU(),
         tf.keras.layers.MaxPooling2D(pool_size=(1, 2), strides=(2, 2)),
         tf.keras.layers.Dropout(0.3),
-        tf.keras.layers.Conv1D(filters=64, kernel_size=5, strides=1,
-                               activation=tf.keras.layers.LeakyReLU(alpha=0.2)),
-        tf.keras.layers.Reshape((19, 64)),  # reshape to (None, 19, 64) from 4D to 3D input shape
-        tf.keras.layers.MaxPooling1D(pool_size=2, strides=2),
+        tf.keras.layers.Conv1D(filters=64, kernel_size=5, strides=1, padding="same"),
+        tf.keras.layers.LeakyReLU(),
+        tf.keras.layers.MaxPooling2D(pool_size=(1, 2), strides=(2, 2)),
         tf.keras.layers.Dropout(0.3),
         tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(units=512, activation="relu"),
-
-        # Concatenation with acceleration intensity
-        tf.keras.layers.Dense(1),
-        tf.keras.layers.Reshape((1, 1)),
-        tf.keras.layers.Lambda(lambda x: tf.keras.backend.expand_dims(x[1], axis=1)),
-
-        tf.keras.layers.LSTM(512, return_sequences=True),
-        tf.keras.layers.Dropout(0.3),
-        tf.keras.layers.LSTM(222),
-        tf.keras.layers.Dropout(0.2),
-        tf.keras.layers.Dense(222, activation=tf.keras.layers.LeakyReLU(alpha=0.2)),
+        tf.keras.layers.Dense(units=512),
+        tf.keras.layers.LeakyReLU(),
+        tf.keras.layers.Reshape((1, 512)),  # Reshape to (batch_size, timesteps, features)
+        tf.keras.layers.LSTM(units=512, return_sequences=True),
+        tf.keras.layers.LSTM(units=222),
+        tf.keras.layers.Dense(units=222),
         tf.keras.layers.Softmax(),
     ])
 
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
-        loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False),
+        loss=tf.keras.losses.CategoricalCrossentropy(),
         metrics="accuracy",
     )
 
@@ -362,18 +400,6 @@ if __name__ == '__main__':
     # y_train: train data with ground truth
     # y_test: test data with ground truth
 
-    labels_array = gaussian_heart_rate(ground_truth)
+    X_train, X_test, y_train, y_test = train_test_split(data_array, labels_array, test_size=0.33, random_state=42)
 
-    PPG_data_array = np.zeros((len(power_spectra_ppg), np.max(number_windows), 222))
-    ACC_data_array = np.zeros((len(power_spectra_acc), np.max(number_windows), 222))
-    Labels_data_array = np.zeros((len(ground_truth), np.max(number_windows), 222))
-
-    for i in range(0, len(power_spectra_ppg)):
-        start = 0
-        end = min(start + power_spectra_ppg[i].shape[0], PPG_data_array.shape[1])
-
-        PPG_data_array[i][start:end, :] = power_spectra_ppg[i][:end - start, :]
-        ACC_data_array[i][start:end, :] = power_spectra_acc[i][:end - start, :]
-        Labels_data_array[i][start:end, :] = labels_array[i][:end - start, :]
-
-    test = np.stack((PPG_data_array, ACC_data_array), axis=2)
+    model.fit(X_train, y_train, epochs=10, batch_size=1)
