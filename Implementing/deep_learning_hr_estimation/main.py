@@ -11,6 +11,7 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import scipy
 import skimage
+import keras.backend as backend
 
 F = 50
 T = 1 / F
@@ -192,7 +193,7 @@ def calc_mean_intensity_acc(windows):
     return mean_window_intensity
 
 
-def gaussian_heart_rate(labels, num_samples=222, sigma=3):
+def gaussian_heart_rate(labels, num_samples=222, sigma=0.1):
     """
     Creates a Gaussian distribution
     :param labels: heart rate value per window
@@ -205,11 +206,15 @@ def gaussian_heart_rate(labels, num_samples=222, sigma=3):
     for i in range(0, len(labels)):
         gaussian_samples = np.empty((len(labels[i]), num_samples))
         for j in range(0, len(labels[i])):
-            x = np.linspace(0.6, 3.3, num_samples)
-            gaussian_samples[j] = 1 * np.exp(-0.5 * ((x - (labels[i][j] / 60)) / sigma) ** 2)
+            gaussian_frequency = np.linspace(0.6, 3.3, num_samples)
+            gaussian_samples[j] = 1 * np.exp(-0.5 * ((gaussian_frequency - (labels[i][j] / 60)) / sigma) ** 2)
         out.append(gaussian_samples)
 
     return out
+
+
+def aae(y_true, y_pred):
+    return backend.mean(backend.abs(y_pred - y_true), axis=-1) * 60
 
 
 if __name__ == '__main__':
@@ -363,32 +368,51 @@ if __name__ == '__main__':
     for x in range(0, len(temp_list)):
         intensity_array[x] = temp_list[x]
 
-    ####################################################################################################################
+    # plt.figure()
+    # plt.plot(data_array[0][0])
+    # plt.plot(data_array[0][1])
+    # plt.show()
+    #
+    # plt.figure()
+    # plt.plot(np.linspace(0.6, 3.3, 222), labels_array[0][0])
+    # plt.show()
 
-    model = tf.keras.models.Sequential([
-        tf.keras.layers.Conv2D(filters=32, kernel_size=(2, 37), strides=(4, 4), padding="same",
-                               input_shape=(2, 222, 1)),
+    ####################################################################################################################
+    time_steps = 1
+
+    model = tf.keras.Sequential([
+        # 2D Convolutional Layer
+        tf.keras.layers.Conv2D(filters=32, kernel_size=(2, 37), strides=(4, 4),
+                               padding="same", input_shape=(2, 222, 1)),
         tf.keras.layers.LeakyReLU(),
         tf.keras.layers.MaxPooling2D(pool_size=(1, 2), strides=(2, 2)),
         tf.keras.layers.Dropout(0.3),
-        tf.keras.layers.Conv1D(filters=64, kernel_size=5, strides=1, padding="same"),
+
+        # 1D Convolutional Layer
+        tf.keras.layers.Conv2D(filters=64, kernel_size=(1, 5), strides=(1, 1), padding="same"),
         tf.keras.layers.LeakyReLU(),
         tf.keras.layers.MaxPooling2D(pool_size=(1, 2), strides=(2, 2)),
         tf.keras.layers.Dropout(0.3),
-        tf.keras.layers.Flatten(),
+
+        # Flatten the output
+        tf.keras.layers.TimeDistributed(tf.keras.layers.Flatten()),
+
         tf.keras.layers.Dense(units=512),
         tf.keras.layers.LeakyReLU(),
-        tf.keras.layers.Reshape((1, 512)),  # Reshape to (batch_size, timesteps, features)
-        tf.keras.layers.LSTM(units=512, return_sequences=True),
-        tf.keras.layers.LSTM(units=222),
+
+        tf.keras.layers.LSTM(units=512, return_sequences=True, dropout=0.2),
+
+        tf.keras.layers.LSTM(units=222, dropout=0.3),
+
         tf.keras.layers.Dense(units=222),
+
         tf.keras.layers.Softmax(),
     ])
 
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
         loss=tf.keras.losses.CategoricalCrossentropy(),
-        metrics="accuracy",
+        metrics=[aae],
     )
 
     model.summary()
@@ -400,6 +424,8 @@ if __name__ == '__main__':
     # y_train: train data with ground truth
     # y_test: test data with ground truth
 
-    X_train, X_test, y_train, y_test = train_test_split(data_array, labels_array, test_size=0.33, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(
+        data_array, np.squeeze(labels_array, axis=1),
+        test_size=0.33, random_state=42)
 
     model.fit(X_train, y_train, epochs=10, batch_size=1)
