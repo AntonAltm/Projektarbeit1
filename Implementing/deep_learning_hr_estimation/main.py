@@ -6,6 +6,7 @@ Sensor data fusion of PPG and ACC data for heart rate estimation using neural ne
 """
 
 import numpy as np
+import sklearn.model_selection
 from sklearn.model_selection import train_test_split
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -13,17 +14,25 @@ import scipy
 import skimage
 import keras.backend as backend
 
+from ModelGenerator import ModelGenerator
+
 F = 50
 T = 1 / F
 
 
 def load_data(filename):
     """
-
+    Loading the data
     :param filename: file name of the data to load
     :return: raw PPG and ACC data and the labels as bpm of ECG
     along with a time vector and the used window duration/size
     """
+
+    # bpm_ecg: ECG heart rate
+    # bpm_proposed: ECG times
+    # rawPPG: PPG signal
+    # rawAcc: Accelerometer signal
+
     try:
         data = scipy.io.loadmat(filename)
         rawPPG = np.array(data["rawPPG"])
@@ -193,12 +202,89 @@ def calc_mean_intensity_acc(windows):
     return mean_window_intensity
 
 
-def gaussian_heart_rate(labels, num_samples=222, sigma=0.1):
+def stack_windows(ppg, acc, intensity, gt):
+    """
+    windows are in shape of a list with numpy arrays, the function stacks the arrays up on each other
+    :param ppg: preprocessed ppg windows
+    :param acc: preprocessed acc windows
+    :param intensity: preprocessed intensity
+    :param gt: ground truth to calculate the gaussian distribution
+    :return: returns the three stacked data matrices, ppg and acc stacked together with shape (..., 2, 222),
+    intensity with shape (..., 1, 1) and labels (ground truth gaussian distribution) with shape (..., 1, 222)
+    """
+    temp_list = []
+
+    for i in range(0, len(ppg)):
+        for j in range(0, len(ppg[i])):
+            temp_list.append(np.array([ppg[i][j], acc[i][j]]))
+
+    data_array = np.empty((len(temp_list), 2, 222))
+
+    for x in range(0, len(temp_list)):
+        data_array[x] = temp_list[x]
+
+    labels_list = gaussian_heart_rate(gt)
+
+    temp_list = []
+
+    for i in range(0, len(labels_list)):
+        for j in range(0, len(labels_list[i])):
+            temp_list.append(np.array(labels_list[i][j]))
+
+    labels_array = np.empty((len(temp_list), 1, 222))
+
+    for x in range(0, len(temp_list)):
+        labels_array[x] = temp_list[x]
+
+    temp_list = []
+
+    for i in range(0, len(intensity)):
+        for j in range(0, len(intensity[i])):
+            temp_list.append(np.array(intensity[i][j]))
+
+    intensity_array = np.empty((len(temp_list), 1, 1))
+
+    for x in range(0, len(temp_list)):
+        intensity_array[x] = temp_list[x]
+
+    return data_array, labels_array, intensity_array
+
+
+def split_into_sequence(X, y, intensity):
+    """
+    Splits the data into sequences of the size of 6
+    :param X: data with features (ppg and acc windows stacked)
+    :param y: data with labels (stacked gaussian distributions of true heart rate)
+    :return: returns the sequences of X and y
+    """
+    time_steps = 6
+
+    # Reshape the data to include the time step dimension
+    num_samples = X.shape[0]
+    sequence_size = num_samples // time_steps
+    remainder = num_samples % time_steps
+
+    if remainder != 0:
+        # If the number of samples is not divisible by the number of timestamps,
+        # you can either discard the remaining samples or pad the data to form
+        # a complete batch. Here, we choose to discard the remaining samples.
+        X = X[:num_samples - remainder]
+        y = y[:num_samples - remainder]
+        intensity = intensity[:num_samples - remainder]
+
+    X = X.reshape(sequence_size, time_steps, 2, 222, 1)
+    y = y.reshape(sequence_size, time_steps, 222)
+    intensity = intensity.reshape(sequence_size, time_steps, 1)
+
+    return X, y, intensity
+
+
+def gaussian_heart_rate(labels, num_samples=222, sigma=3):
     """
     Creates a Gaussian distribution
     :param labels: heart rate value per window
     :param num_samples: number of samples fitting to number of samples in window
-    :param sigma: standard deviation, fixed set as 3
+    :param sigma: standard deviation, fixed set to 3
     :return:
     """
     out = []
@@ -207,7 +293,9 @@ def gaussian_heart_rate(labels, num_samples=222, sigma=0.1):
         gaussian_samples = np.empty((len(labels[i]), num_samples))
         for j in range(0, len(labels[i])):
             gaussian_frequency = np.linspace(0.6, 3.3, num_samples)
-            gaussian_samples[j] = 1 * np.exp(-0.5 * ((gaussian_frequency - (labels[i][j] / 60)) / sigma) ** 2)
+            # gaussian_samples[j] = 1 * np.exp(-0.5 * ((gaussian_frequency - (labels[i][j] / 60)) / sigma) ** 2)
+            gaussian_samples[j] = (1 / (sigma * np.sqrt(2 * np.pi))) * \
+                                  np.exp(-((gaussian_frequency - (labels[i][j] / 60)) ** 2) / (2 * sigma ** 2))
         out.append(gaussian_samples)
 
     return out
@@ -217,7 +305,17 @@ def aae(y_true, y_pred):
     return backend.mean(backend.abs(y_pred - y_true), axis=-1) * 60
 
 
-if __name__ == '__main__':
+def custom_loss(y_true, y_pred):
+    # base_loss = tf.keras.losses.CategoricalCrossentropy()(y_true, y_pred)
+    cost = (-1) * tf.math.log(y_pred * (tf.math.exp(-(y_true ** 2) / (2 * 3 ** 2))) / (
+        tf.reduce_max(tf.math.exp(-(y_true ** 2) / (2 * 3 ** 2)))))
+
+    return cost
+
+
+def main():
+    # create the model generator for the neural network
+    model_generator = ModelGenerator(time_steps=6, input_height=2, input_width=222, input_channels=1)
 
     # create filter coefficients
     b_1, a_1, frequency, response = design_bandpass_filter(4, 0.4, 4, F)
@@ -237,8 +335,6 @@ if __name__ == '__main__':
         number_windows.append(len(GT))
 
         # save ground truth data
-        # GT = np.expand_dims(GT, axis=2)
-        # ground_truth = np.concatenate(GT)
         ground_truth.append(GT)
 
         # create the windows of all 3 PPGs
@@ -333,101 +429,63 @@ if __name__ == '__main__':
 
     ####################################################################################################################
 
-    temp_list = []
-
-    for i in range(0, len(power_spectra_ppg)):
-        for j in range(0, len(power_spectra_ppg[i])):
-            temp_list.append(np.array([power_spectra_ppg[i][j], power_spectra_acc[i][j]]))
-
-    data_array = np.empty((len(temp_list), 2, 222))
-
-    for x in range(0, len(temp_list)):
-        data_array[x] = temp_list[x]
-
-    labels_list = gaussian_heart_rate(ground_truth)
-
-    temp_list = []
-
-    for i in range(0, len(labels_list)):
-        for j in range(0, len(labels_list[i])):
-            temp_list.append(np.array(labels_list[i][j]))
-
-    labels_array = np.empty((len(temp_list), 1, 222))
-
-    for x in range(0, len(temp_list)):
-        labels_array[x] = temp_list[x]
-
-    temp_list = []
-
-    for i in range(0, len(intensity_acc)):
-        for j in range(0, len(intensity_acc[i])):
-            temp_list.append(np.array(intensity_acc[i][j]))
-
-    intensity_array = np.empty((len(temp_list), 1, 1))
-
-    for x in range(0, len(temp_list)):
-        intensity_array[x] = temp_list[x]
-
-    ####################################################################################################################
-    time_steps = 6
-    height = 2
-    width = 222
-    channels = 1
-    input_shape = (time_steps, height, width, channels)
-
-    model = tf.keras.models.Sequential([
-        tf.keras.layers.TimeDistributed(
-            tf.keras.layers.Conv2D(filters=32, kernel_size=(2, 37), strides=(4, 4), padding="same"),
-            input_shape=input_shape),
-        tf.keras.layers.TimeDistributed(tf.keras.layers.LeakyReLU()),
-        tf.keras.layers.TimeDistributed(tf.keras.layers.MaxPooling2D(pool_size=(1, 2), strides=(2, 2))),
-        tf.keras.layers.TimeDistributed(tf.keras.layers.Dropout(0.3)),
-        tf.keras.layers.TimeDistributed(tf.keras.layers.Conv1D(filters=64, kernel_size=5, strides=1, padding="same")),
-        tf.keras.layers.TimeDistributed(tf.keras.layers.LeakyReLU()),
-        tf.keras.layers.TimeDistributed(tf.keras.layers.MaxPooling2D(pool_size=(1, 2), strides=(2, 2))),
-        tf.keras.layers.TimeDistributed(tf.keras.layers.Dropout(0.3)),
-        tf.keras.layers.TimeDistributed(tf.keras.layers.Flatten()),
-        tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(units=512)),
-        tf.keras.layers.TimeDistributed(tf.keras.layers.LeakyReLU()),
-        tf.keras.layers.LSTM(units=512, return_sequences=True, dropout=0.2),
-        tf.keras.layers.LSTM(units=222, return_sequences=True, dropout=0.3),
-        tf.keras.layers.Lambda(lambda x: x[:, -1, :]),
-        tf.keras.layers.Dense(units=222),
-        tf.keras.layers.Softmax()
-    ])
-
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
-        loss=tf.keras.losses.CategoricalCrossentropy(),
-        metrics=[aae],
-    )
-
-    model.summary()
-
-    ####################################################################################################################
-
     # X_train: train data with features
     # X_test: test data with features
     # y_train: train data with ground truth
     # y_test: test data with ground truth
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        data_array, np.squeeze(labels_array, axis=1),
-        test_size=0.33, random_state=42)
+    data_array, labels_array, intensity_acc = \
+        stack_windows(power_spectra_ppg, power_spectra_acc, ground_truth, intensity_acc)
 
-    # Reshape the data to include the time step dimension
-    num_samples = X_train.shape[0]
-    sequence_size = num_samples // time_steps
-    remainder = num_samples % time_steps
+    X, y, intensity = split_into_sequence(X=data_array, y=labels_array, intensity=intensity_acc)
 
-    if remainder != 0:
-        # If the number of samples is not divisible by the number of timestamps,
-        # you can either discard the remaining samples or pad the data to form
-        # a complete batch. Here, we choose to discard the remaining samples.
-        X_train = X_train[:num_samples - remainder]
-        y_train = y_train[:num_samples - remainder]
+    X_train, X_test, y_train, y_test, intensity_train, intensity_test = train_test_split(
+        X, y, intensity, test_size=0.33, random_state=None)
 
-    X_train = X_train.reshape(sequence_size, time_steps, 2, 222, 1)
-    y_train = y_train.reshape(sequence_size, time_steps, 222)
+    ####################################################################################################################
 
-    model.fit(X_train, y_train[:, -1, :], epochs=10, batch_size=1)
+    model = model_generator.generate_model()
+
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
+        loss=custom_loss,
+        metrics=[aae],
+    )
+
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir="logs")
+
+    model.summary()
+
+    history = model.fit(X_train, y_train[:, -1, :], epochs=1, batch_size=1, callbacks=[tensorboard_callback])
+
+    predictions = model.predict(X_test, batch_size=1)
+
+    ####################################################################################################################
+
+    num_folds = 4
+
+    kf = sklearn.model_selection.KFold(n_splits=num_folds, shuffle=True, random_state=42)
+
+    fold_accuracies = []
+
+    # Perform cross-validation manually
+    for train_index, test_index in kf.split(X_train):
+        X_train, X_test = X_train[train_index], X_test[test_index]
+        y_train, y_test = y_train[train_index], y_test[test_index]
+
+        model.fit(X_train, y_train, epochs=10, batch_size=32, verbose=0)
+
+        y_pred = model.predict_classes(X_test)
+        fold_accuracy = sklearn.metrics.accuracy_score(y_test, y_pred)
+        fold_accuracies.append(fold_accuracy)
+
+    # Print the fold accuracies
+    for fold_num, accuracy in enumerate(fold_accuracies, start=1):
+        print(f"Fold {fold_num} Accuracy: {accuracy:.4f}")
+
+    # Print the average accuracy
+    print(f"Average Accuracy: {np.mean(fold_accuracies):.4f}")
+
+
+if __name__ == '__main__':
+    main()
