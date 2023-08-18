@@ -279,7 +279,7 @@ def split_into_sequence(X, y, intensity):
     return X, y, intensity
 
 
-def gaussian_heart_rate(labels, num_samples=222, sigma=3):
+def gaussian_heart_rate(labels, num_samples=222, sigma=0.1):
     """
     Creates a Gaussian distribution
     :param labels: heart rate value per window
@@ -288,15 +288,17 @@ def gaussian_heart_rate(labels, num_samples=222, sigma=3):
     :return:
     """
     out = []
+    gaussian_frequency = np.linspace(0.6, 3.3, num_samples)
 
     for i in range(0, len(labels)):
         gaussian_samples = np.empty((len(labels[i]), num_samples))
+        normalized_values = np.empty((len(labels[i]), num_samples))
         for j in range(0, len(labels[i])):
-            gaussian_frequency = np.linspace(0.6, 3.3, num_samples)
+            gaussian_samples[j] = scipy.stats.norm.pdf(gaussian_frequency, labels[i][j] / 60, sigma)
+            normalized_values[j] = gaussian_samples[j] / gaussian_samples[j].max()
             # gaussian_samples[j] = 1 * np.exp(-0.5 * ((gaussian_frequency - (labels[i][j] / 60)) / sigma) ** 2)
-            gaussian_samples[j] = (1 / (sigma * np.sqrt(2 * np.pi))) * \
-                                  np.exp(-((gaussian_frequency - (labels[i][j] / 60)) ** 2) / (2 * sigma ** 2))
-        out.append(gaussian_samples)
+            # gaussian_samples[j] = (1 / (sigma * np.sqrt(2 * np.pi))) * np.exp(-((gaussian_frequency - (labels[i][j] / 60)) ** 2) / (2 * sigma ** 2))
+        out.append(normalized_values)
 
     return out
 
@@ -435,7 +437,7 @@ def main():
     # y_test: test data with ground truth
 
     data_array, labels_array, intensity_acc = \
-        stack_windows(power_spectra_ppg, power_spectra_acc, ground_truth, intensity_acc)
+        stack_windows(ppg=power_spectra_ppg, acc=power_spectra_acc, intensity=intensity_acc, gt=ground_truth)
 
     X, y, intensity = split_into_sequence(X=data_array, y=labels_array, intensity=intensity_acc)
 
@@ -449,6 +451,7 @@ def main():
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
         loss=custom_loss,
+        # loss=tf.keras.losses.CategoricalCrossentropy(),
         metrics=[aae],
     )
 
@@ -456,35 +459,16 @@ def main():
 
     model.summary()
 
-    history = model.fit(X_train, y_train[:, -1, :], epochs=1, batch_size=1, callbacks=[tensorboard_callback])
+    model.fit((X_train, intensity_train), y_train[:, -1, :], epochs=1, batch_size=1, callbacks=[tensorboard_callback])
 
-    predictions = model.predict(X_test, batch_size=1)
+    predictions = model.predict((X_test, intensity_test), batch_size=1)
+
+    plt.figure()
+    plt.plot(y_test[0][-1][:])
+    plt.plot(predictions[0][:])
+    plt.show()
 
     ####################################################################################################################
-
-    num_folds = 4
-
-    kf = sklearn.model_selection.KFold(n_splits=num_folds, shuffle=True, random_state=42)
-
-    fold_accuracies = []
-
-    # Perform cross-validation manually
-    for train_index, test_index in kf.split(X_train):
-        X_train, X_test = X_train[train_index], X_test[test_index]
-        y_train, y_test = y_train[train_index], y_test[test_index]
-
-        model.fit(X_train, y_train, epochs=10, batch_size=32, verbose=0)
-
-        y_pred = model.predict_classes(X_test)
-        fold_accuracy = sklearn.metrics.accuracy_score(y_test, y_pred)
-        fold_accuracies.append(fold_accuracy)
-
-    # Print the fold accuracies
-    for fold_num, accuracy in enumerate(fold_accuracies, start=1):
-        print(f"Fold {fold_num} Accuracy: {accuracy:.4f}")
-
-    # Print the average accuracy
-    print(f"Average Accuracy: {np.mean(fold_accuracies):.4f}")
 
 
 if __name__ == '__main__':

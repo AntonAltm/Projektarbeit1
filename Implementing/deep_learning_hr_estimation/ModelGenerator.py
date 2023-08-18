@@ -6,26 +6,34 @@ class ModelGenerator:
         self.input_shape = (time_steps, input_height, input_width, input_channels)
 
     def generate_model(self):
-        model = tf.keras.models.Sequential([
-            tf.keras.layers.TimeDistributed(
-                tf.keras.layers.Conv2D(filters=32, kernel_size=(2, 37), strides=(4, 4), padding="same"),
-                input_shape=self.input_shape),
-            tf.keras.layers.TimeDistributed(tf.keras.layers.LeakyReLU()),
-            tf.keras.layers.TimeDistributed(tf.keras.layers.MaxPooling2D(pool_size=(1, 2), strides=(2, 2))),
-            tf.keras.layers.TimeDistributed(tf.keras.layers.Dropout(0.3)),
-            tf.keras.layers.TimeDistributed(
-                tf.keras.layers.Conv1D(filters=64, kernel_size=5, strides=1, padding="same")),
-            tf.keras.layers.TimeDistributed(tf.keras.layers.LeakyReLU()),
-            tf.keras.layers.TimeDistributed(tf.keras.layers.MaxPooling2D(pool_size=(1, 2), strides=(2, 2))),
-            tf.keras.layers.TimeDistributed(tf.keras.layers.Dropout(0.3)),
-            tf.keras.layers.TimeDistributed(tf.keras.layers.Flatten()),
-            tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(units=512)),
-            tf.keras.layers.TimeDistributed(tf.keras.layers.LeakyReLU()),
-            tf.keras.layers.LSTM(units=512, return_sequences=True, dropout=0.2),
-            tf.keras.layers.LSTM(units=222, return_sequences=True, dropout=0.3),
-            tf.keras.layers.Lambda(lambda x: x[:, -1, :]),
-            tf.keras.layers.Dense(units=222),
-            tf.keras.layers.Softmax()
-        ])
+        # Input layers
+        intensity = tf.keras.layers.Input(shape=(6, 1))
+        input_layer = tf.keras.layers.Input(shape=self.input_shape)
+
+        # TimeDistributed layers
+        td_conv1 = tf.keras.layers.TimeDistributed(
+            tf.keras.layers.Conv2D(filters=32, kernel_size=(2, 37), strides=(4, 4), padding="same")
+        )(input_layer)
+        td_leaky_relu1 = tf.keras.layers.TimeDistributed(tf.keras.layers.LeakyReLU())(td_conv1)
+        td_max_pooling1 = tf.keras.layers.TimeDistributed(tf.keras.layers.MaxPooling2D(pool_size=(1, 2), strides=(2, 2)))(td_leaky_relu1)
+        td_dropout1 = tf.keras.layers.TimeDistributed(tf.keras.layers.Dropout(0.3))(td_max_pooling1)
+        td_conv2 = tf.keras.layers.TimeDistributed(tf.keras.layers.Conv1D(filters=64, kernel_size=5, strides=1, padding="same"))(td_dropout1)
+        td_leaky_relu2 = tf.keras.layers.TimeDistributed(tf.keras.layers.LeakyReLU())(td_conv2)
+        td_max_pooling2 = tf.keras.layers.TimeDistributed(tf.keras.layers.MaxPooling2D(pool_size=(1, 2), strides=(2, 2)))(td_leaky_relu2)
+        td_dropout2 = tf.keras.layers.TimeDistributed(tf.keras.layers.Dropout(0.3))(td_max_pooling2)
+        td_flatten = tf.keras.layers.TimeDistributed(tf.keras.layers.Flatten())(td_dropout2)
+        td_dense = tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(units=512))(td_flatten)
+        td_leaky_relu3 = tf.keras.layers.TimeDistributed(tf.keras.layers.LeakyReLU())(td_dense)
+
+        # Concatenate and LSTM layers
+        concatenated = tf.keras.layers.Concatenate(axis=-1)([td_leaky_relu3, intensity])
+        lstm1 = tf.keras.layers.LSTM(units=512, return_sequences=True, dropout=0.2)(concatenated)
+        lstm2 = tf.keras.layers.LSTM(units=222, return_sequences=True, dropout=0.3)(lstm1)
+        last_timestamp = tf.keras.layers.Lambda(lambda x: x[:, -1, :])(lstm2)
+        dense = tf.keras.layers.Dense(units=222)(last_timestamp)
+        softmax = tf.keras.layers.Softmax()(dense)
+
+        # Create the model
+        model = tf.keras.models.Model(inputs=[input_layer, intensity], outputs=softmax)
 
         return model
